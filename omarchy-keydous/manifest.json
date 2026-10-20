@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "eg.keydous",
+  "name": "Keydous Keyboard",
+  "version": "0.2.1",
+  "author": "eg",
+  "description": "Native NJ81 MAX-CP settings with an experimental Linux IoT Manager HID bridge.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Keydous Keyboard",
+    "description": "Native lighting, keymaps, switches, device and firmware tabs",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  },
+  "license": "GPL-3.0-or-later"
+}

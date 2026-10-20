@@ -1,0 +1,2 @@
+# Application-mode permissions only. USB IDs are shared; the plugin also checks record 4207.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="39ab", ATTRS{idProduct}=="9016", TAG+="uaccess"
