@@ -13,11 +13,13 @@ import firmware
 def dispatch(request):
     paths = candidates()
     if len(paths) != 1:
-        raise ValueError('Connect exactly one NJ81 MAX-CP by USB cable')
+        raise ValueError('Connect exactly one registered Keydous keyboard by USB cable')
     keyboard = AdvancedKeyboard(paths[0])
     try:
         action = request.get('action')
         if action in ('firmware-check', 'firmware-download'):
+            if not keyboard.caps['firmware']:
+                raise ValueError('Firmware operations are not validated for this model')
             result = firmware.check(keyboard.device_id, keyboard.firmware)
             if action == 'firmware-download':
                 result = firmware.download(result)

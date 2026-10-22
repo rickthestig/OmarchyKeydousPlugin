@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""NJ81 MAX-CP controls. Standard-library Linux HID feature reports only."""
+"""Model-aware Keydous controls. Standard-library Linux HID feature reports only."""
 import argparse
 import fcntl
 import json
@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import sys
 import time
+from models import MODELS, spec, capabilities, profile_op
 
 DEVICE_ID = 4207
 MODES = {1: 'Static', 2: 'Breathing', 3: 'Spectrum', 4: 'Wave', 5: 'Ripple',
@@ -33,9 +34,12 @@ def candidates():
             info = dict(line.split('=', 1) for line in (entry / 'device/uevent').read_text().splitlines() if '=' in line)
             desc = (entry / 'device/report_descriptor').read_bytes()
             # Exact vendor feature collection; never open the typing interfaces.
-            if info.get('HID_ID') == '0003:000039AB:00009016' and b'\x06\xff\xff\x09\x02' in desc:
+            pairs = {(r['vendorId'], r['productId']) for r in MODELS.values()}
+            hid = info.get('HID_ID', '').split(':')
+            pair = (int(hid[1], 16), int(hid[2], 16)) if len(hid) == 3 else None
+            if pair in pairs and b'\x06\xff\xff\x09\x02' in desc:
                 result.append('/dev/' + entry.name)
-        except OSError:
+        except (OSError, ValueError):
             continue
     return result
 
@@ -47,12 +51,22 @@ class Keyboard:
             fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             identity = self.get(0x8f)
             self.device_id = int.from_bytes(identity[1:5], 'little')
-            if self.device_id != DEVICE_ID:
-                raise ValueError(f'Device identifies as {self.device_id}; expected NJ81 MAX-CP ({DEVICE_ID}). Controls disabled.')
             self.firmware = f'{int.from_bytes(identity[7:9], "little"):04x}'
         except Exception:
             os.close(self.fd)
             raise
+
+    @property
+    def model(self):
+        return spec(self.device_id)
+
+    @property
+    def caps(self):
+        return capabilities(self.model)
+
+    @property
+    def profile_opcode(self):
+        return profile_op(self.model)
 
     def close(self):
         os.close(self.fd)
@@ -75,12 +89,20 @@ class Keyboard:
         raise ValueError(f'Keyboard did not return a valid reply to 0x{op:02x}. Use a USB cable and close other keyboard configurators.')
 
     def state(self):
+        base = dict(connected=True, deviceId=self.device_id, firmware=self.firmware,
+                    modelName=self.model['displayName'], family=self.model['family'],
+                    profileCount=self.model['profiles'], capabilities=self.caps, modes=[])
+        if not self.caps['profiles']:
+            return dict(base, profile=0, compatibility='Detected; protocol is not supported. Writes are disabled.')
+        profile = self.get(self.profile_opcode)[1]
+        if profile >= self.model['profiles']:
+            raise ValueError('Unexpected profile response for this model')
+        if not self.caps['lighting']:
+            return dict(base, profile=profile, compatibility='Keymap reads available; lighting table is not supported for this model.')
         light = self.get(0x87)
-        profile = self.get(0x84)[1]
         if light[2] > 4 or light[3] > 4 or profile > 3:
             raise ValueError('Unexpected settings response; controls disabled for this firmware.')
-        return dict(connected=True, deviceId=self.device_id, firmware=self.firmware,
-                    mode=light[1], speed=4-light[2], brightness=light[3],
+        return dict(base, mode=light[1], speed=4-light[2], brightness=light[3],
                     flags=light[4], color='#' + light[5:8].hex(), profile=profile,
                     modes=[dict(value=k, label=v) for k, v in MODES.items()])
 
@@ -94,12 +116,16 @@ class Keyboard:
         temp.replace(target)
 
     def apply(self, args):
+        if not self.caps.get('lighting' if args.action == 'light' else 'profiles'):
+            raise ValueError('This operation is not supported for the detected model')
+        if args.action == 'profile' and not 0 <= args.profile < self.model['profiles']:
+            raise ValueError('Profile is out of range for the detected model')
         state = self.state()
         self.backup(state)
         if args.action == 'profile':
-            self.send(packet(0x04, [args.profile]))
+            self.send(packet(self.profile_opcode & 0x7f, [args.profile]))
             time.sleep(0.25)
-            if self.get(0x84)[1] != args.profile:
+            if self.get(self.profile_opcode)[1] != args.profile:
                 raise ValueError('Profile change did not read back.')
         elif args.action == 'light':
             mode = args.mode if args.mode is not None else state['mode']
@@ -150,16 +176,16 @@ def main():
     group = parser.add_mutually_exclusive_group()
     group.add_argument('--color', type=rgb)
     group.add_argument('--rainbow', action='store_true')
-    parser.add_argument('--profile', type=bounded(0, 3))
+    parser.add_argument('--profile', type=bounded(0, 15))
     args = parser.parse_args()
     if args.action == 'profile' and args.profile is None:
-        parser.error('profile requires --profile 0..3')
+        parser.error('profile requires --profile (zero-based onboard index)')
     try:
         paths = candidates()
         if not paths:
-            raise ValueError('NJ81 MAX-CP not found. Connect it with a USB cable.')
+            raise ValueError('No registered Keydous USB interface found. Connect it with a USB cable.')
         if len(paths) != 1:
-            raise ValueError('Multiple matching keyboards found. Connect one NJ81 MAX-CP at a time.')
+            raise ValueError('Multiple matching keyboards found. Connect one Keydous keyboard at a time.')
         keyboard = Keyboard(paths[0])
         try:
             result = keyboard.state() if args.action == 'status' else keyboard.apply(args)

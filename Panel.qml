@@ -14,6 +14,9 @@ Panel {
   implicitWidth: 30
   implicitHeight: bar ? bar.barSize : 26
   property var state: ({connected: false})
+  property var paintData: null
+  property var paintColors: []
+  property bool paintDirty: false
   property var keysData: null
   property var switchData: null
   property var deviceData: null
@@ -26,6 +29,7 @@ Panel {
   property bool compatibilityReady: false
   property bool firmwareBridge: false
   property url pictureFile
+  readonly property var caps: state.capabilities || ({})
   readonly property bool ready: state.connected === true && !busy && !compat.running
   readonly property var selectedKey: keysData && keysData.keys[keySelect.currentIndex] ? keysData.keys[keySelect.currentIndex] : null
   readonly property string folder: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "")
@@ -71,16 +75,19 @@ Panel {
       if (!nativeJob) {
         if (!next.connected) { state = next; message = "Keyboard unavailable"; return }
         var oldProfile = state.profile
+        var oldDevice = state.deviceId
         state = next
-        if (oldProfile !== state.profile) { keysData = null; switchData = null; deviceData = null }
-        message = "Connected · firmware " + next.firmware
+        if (oldProfile !== state.profile || oldDevice !== state.deviceId) { keysData = null; switchData = null; deviceData = null; paintData = null; paintColors = []; paintDirty = false; tabs.currentIndex = 0; hostSelect.currentIndex = 0 }
+        message = next.compatibility || (next.modelName + " · firmware " + next.firmware)
         effect.currentIndex = next.modes.findIndex(function(m) { return m.value === next.mode })
-        brightness.value = next.brightness
-        speed.value = next.speed
-        hex.text = next.color
+        brightness.value = next.brightness === undefined ? 0 : next.brightness
+        speed.value = next.speed === undefined ? 0 : next.speed
+        hex.text = next.color || ""
         return
       }
       message = next.message || "Settings loaded"
+      if (next.kind === "paint") { paintView.currentIndex = 0; paintData = next; paintColors = next.colors.slice(); paintDirty = false }
+      if (next.kind === "paint-saved") { paintData = Object.assign({}, paintData, {colors: paintColors.slice()}); paintDirty = false }
       if (next.kind === "keys") { keysData = next; switchData = null }
       if (next.kind === "switches") {
         switchData = next
@@ -106,6 +113,13 @@ Panel {
       if (next.kind === "firmware") { firmwareData = next; if (next.downloadMessage) message = next.downloadMessage }
       if (next.path) message += "\n" + next.path
     } catch (e) { message = "Invalid helper response: " + e }
+  }
+  function paintKey(index, erase) {
+    if (!ready || !paintData || !/^#[0-9a-fA-F]{6}$/.test(brush.text)) return
+    var colors = paintColors.slice()
+    colors[index] = erase ? "#000000" : brush.text.toLowerCase()
+    paintColors = colors
+    paintDirty = true
   }
   onOpenedChanged: if (opened && !compat.running) run(["status"])
   Process {
@@ -134,12 +148,17 @@ Panel {
     nameFilters: ["Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif)"]
     onAccepted: root.pictureFile = selectedFile
   }
+  ColorDialog {
+    id: paintPicker
+    title: "Brush colour"
+    onAccepted: brush.text = selectedColor.toString().slice(-7)
+  }
   BarIconButton {
     id: button
     anchors.fill: parent
     bar: root.bar
     text: "󰌌"
-    tooltipText: "Keydous NJ81 MAX-CP · keyboard controls"
+    tooltipText: (root.state.modelName || "Keydous") + " · keyboard controls"
     onPressed: root.toggle()
   }
   KeyboardPanel {
@@ -169,18 +188,25 @@ Panel {
         anchors.fill: parent
         spacing: 10
         RowLayout {
-          Label { text: "Keydous NJ81 MAX-CP"; font.pixelSize: 20; font.bold: true }
+          Label { text: root.state.modelName || "Keydous Keyboard"; font.pixelSize: 20; font.bold: true }
           Action { text: root.busy ? "Working…" : "Refresh"; onClicked: root.run(["status"]) }
         }
         Label { text: root.message; opacity: 0.8; maximumLineCount: 4; elide: Text.ElideRight }
+        Label { text: "Onboard profile"; visible: root.caps.profiles === true }
+        RowLayout {
+          visible: root.caps.profiles === true
+          enabled: root.ready
+          Repeater { model: root.state.profileCount || 0; Action { required property int index; text: String(index + 1); highlighted: root.state.profile === index; onClicked: root.run(["profile", "--profile", String(index)]) } }
+        }
         Controls.TabBar {
           id: tabs
           Layout.fillWidth: true
           Controls.TabButton { text: "Lighting" }
-          Controls.TabButton { text: "Keys" }
-          Controls.TabButton { text: "Switches" }
-          Controls.TabButton { text: "Device" }
-          Controls.TabButton { text: "Firmware" }
+          Controls.TabButton { text: "Keys"; enabled: root.caps.keymap === true }
+          Controls.TabButton { text: "Switches"; enabled: root.caps.advanced === true }
+          Controls.TabButton { text: "Device"; enabled: root.caps.advanced === true }
+          Controls.TabButton { text: "Firmware"; enabled: root.caps.firmware === true }
+          Controls.TabButton { text: "Paint"; enabled: root.caps.paint === true }
         }
         Controls.ScrollView {
           Layout.fillWidth: true
@@ -192,7 +218,7 @@ Panel {
             spacing: 12
             ColumnLayout {
               visible: tabs.currentIndex === 0
-              enabled: root.ready
+              enabled: root.ready && root.caps.lighting === true
               Layout.fillWidth: true
               spacing: 12
               Label { text: "Lighting effect" }
@@ -218,10 +244,6 @@ Panel {
                   onClicked: root.run(["light", "--mode", String(effect.currentValue), "--brightness", String(Math.round(brightness.value)), "--speed", String(Math.round(speed.value)), "--rainbow"])
                 }
               }
-              Label { text: "Onboard profile" }
-              RowLayout {
-                Repeater { model: 4; Action { required property int index; text: String(index + 1); highlighted: root.state.profile === index; onClicked: root.run(["profile", "--profile", String(index)]) } }
-              }
               Label { text: "Changes save to the keyboard. Brightness 0 turns LEDs off."; opacity: 0.6 }
             }
             ColumnLayout {
@@ -229,7 +251,7 @@ Panel {
               Layout.fillWidth: true
               spacing: 12
               RowLayout {
-                Controls.ComboBox { id: hostSelect; model: ["Windows layer", "Mac layer"]; enabled: root.ready; onActivated: { root.keysData = null; root.switchData = null } }
+                Controls.ComboBox { id: hostSelect; model: ["Windows layer", "Mac layer"]; enabled: root.ready && root.state.family !== "yc500"; onActivated: { root.keysData = null; root.switchData = null } }
                 Controls.ComboBox { id: layerSelect; model: ["Base layer", "Fn layer"]; enabled: root.ready; onActivated: { root.keysData = null; root.switchData = null } }
                 Action { text: "Load keys"; enabled: root.ready; onClicked: root.loadKeys() }
               }
@@ -245,7 +267,7 @@ Panel {
               ColumnLayout {
                 visible: tabs.currentIndex === 1
                 Layout.fillWidth: true
-                enabled: root.ready && root.selectedKey !== null
+                enabled: root.ready && root.caps.advanced === true && root.selectedKey !== null
                 Label { text: "New assignment" }
                 Controls.ComboBox { id: assignment; Layout.fillWidth: true; model: root.keysData ? root.keysData.choices : []; textRole: "label" }
                 Action {
@@ -370,11 +392,132 @@ Panel {
               Label { text: "Backups: ~/.local/state/omarchy-keydous/backups"; opacity: 0.6 }
             }
             ColumnLayout {
+              visible: tabs.currentIndex === 5
+              Layout.fillWidth: true
+              spacing: 10
+              Label { text: "Per-key lighting · profile " + (root.state.profile + 1); font.bold: true }
+              Label { text: "Load your local painting, then click or drag across keys. Right-drag erases. Apply saves to pattern slot 1, shared across onboard profiles." }
+              RowLayout {
+                Action { text: "Load painting"; enabled: root.ready && !root.paintDirty; onClicked: root.request({action: "paint", profile: root.state.profile}) }
+                Controls.TextField { id: brush; text: "#ff6600"; placeholderText: "#RRGGBB"; maximumLength: 7; Layout.preferredWidth: 100 }
+                Action { text: "Choose…"; onClicked: paintPicker.open() }
+                Rectangle { width: 24; height: 24; color: /^#[0-9a-fA-F]{6}$/.test(brush.text) ? brush.text : "transparent"; border.color: root.fg }
+              }
+              RowLayout {
+                Repeater {
+                  model: ["#ff4040", "#ff9900", "#ffff40", "#40ff80", "#40cfff", "#8060ff", "#ff60cf", "#fafafa", "#000000"]
+                  Rectangle {
+                    required property string modelData
+                    width: 25; height: 25; radius: 4; color: modelData; border.color: root.fg
+                    MouseArea { anchors.fill: parent; onClicked: brush.text = parent.modelData }
+                  }
+                }
+                Action { text: "Accent"; onClicked: brush.text = Commons.Color.accent.toString().slice(-7) }
+              }
+              RowLayout {
+                Controls.ComboBox { id: paintView; model: root.paintData && root.paintData.layout.keys.length ? ["Keyboard view", "Hardware slots"] : ["Hardware slots"] }
+                Label { text: root.paintData ? root.paintData.layout.name : "Load painting to detect layout" }
+              }
+              Label {
+                visible: root.paintData !== null && root.paintData.layout.unresolved > 0
+                text: root.paintData ? root.paintData.layout.unresolved + " positions unresolved. Use Hardware slots for remapped or ambiguous keys." : ""
+                opacity: 0.7
+              }
+              Item {
+                id: paintGrid
+                Layout.fillWidth: true
+                Layout.preferredHeight: physical ? width / 16 * 6.4 : Math.ceil(root.paintColors.length / 9) * 37
+                property bool physical: root.paintData !== null && root.paintData.layout.keys.length > 0 && paintView.currentIndex === 0
+                property real unit: width / 16
+                property var cells: {
+                  if (!root.paintData) return []
+                  if (physical) return root.paintData.layout.keys
+                  return root.paintColors.map(function(c, i) { return {slot: i, x: i % 9, y: Math.floor(i / 9), w: 1, h: 1, label: root.paintData.labels[i], assignment: root.paintData.labels[i]} })
+                }
+                Rectangle {
+                  visible: paintGrid.physical && root.paintData !== null
+                  x: paintGrid.unit * 14; y: 0
+                  width: paintGrid.unit * 2 - 3; height: paintGrid.unit - 3
+                  color: "transparent"; radius: 4; border.color: root.fg; opacity: 0.5
+                  Text { anchors.centerIn: parent; text: "Display"; color: root.fg; font.pixelSize: 9 }
+                }
+                Repeater {
+                  model: paintGrid.cells
+                  Rectangle {
+                    required property var modelData
+                    x: modelData.x * (paintGrid.physical ? paintGrid.unit : paintGrid.width / 9)
+                    y: modelData.y * (paintGrid.physical ? paintGrid.unit : 37)
+                    width: modelData.w * (paintGrid.physical ? paintGrid.unit : paintGrid.width / 9) - 3
+                    height: modelData.h * (paintGrid.physical ? paintGrid.unit : 37) - 3
+                    radius: 4
+                    color: modelData.slot >= 0 ? root.paintColors[modelData.slot] : "#262626"
+                    border.color: modelData.slot >= 0 ? Qt.rgba(1, 1, 1, 0.4) : "#777777"
+                    opacity: modelData.slot >= 0 ? 1 : 0.45
+                    Text {
+                      anchors.fill: parent; anchors.margins: 2
+                      text: parent.modelData.label
+                      color: parent.color.r * 0.299 + parent.color.g * 0.587 + parent.color.b * 0.114 > 0.55 ? "#111111" : "#ffffff"
+                      font.pixelSize: 9; wrapMode: Text.Wrap; elide: Text.ElideRight
+                      horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                    }
+                  }
+                }
+                MouseArea {
+                  id: paintMouse
+                  anchors.fill: parent
+                  enabled: root.ready && root.paintData !== null
+                  acceptedButtons: Qt.LeftButton | Qt.RightButton
+                  hoverEnabled: true
+                  property int lastCell: -1
+                  property string keyHint: ""
+                  function stroke(mouse, draw) {
+                    var unitX = paintGrid.physical ? paintGrid.unit : paintGrid.width / 9
+                    var unitY = paintGrid.physical ? paintGrid.unit : 37
+                    var cell = -1
+                    keyHint = ""
+                    for (var i = 0; i < paintGrid.cells.length; i++) {
+                      var k = paintGrid.cells[i]
+                      if (mouse.x >= k.x * unitX && mouse.x < (k.x + k.w) * unitX - 3 && mouse.y >= k.y * unitY && mouse.y < (k.y + k.h) * unitY - 3) {
+                        cell = k.slot
+                        keyHint = k.label + " · " + k.assignment + (cell >= 0 ? " · slot " + cell : "")
+                        break
+                      }
+                    }
+                    if (draw && cell >= 0 && cell !== lastCell) root.paintKey(cell, (mouse.buttons & Qt.RightButton) !== 0)
+                    lastCell = cell
+                  }
+                  onPressed: function(mouse) { lastCell = -1; stroke(mouse, true) }
+                  onPositionChanged: function(mouse) { stroke(mouse, pressed) }
+                  onReleased: lastCell = -1
+                  onExited: keyHint = ""
+                  Controls.ToolTip.visible: containsMouse && keyHint.length > 0 && !pressed
+                  Controls.ToolTip.text: keyHint
+                  Controls.ToolTip.delay: 400
+                }
+              }
+              RowLayout {
+                Action {
+                  text: "Fill all"; enabled: root.ready && root.paintData !== null && /^#[0-9a-fA-F]{6}$/.test(brush.text)
+                  onClicked: { root.paintColors = Array(root.paintColors.length).fill(brush.text.toLowerCase()); root.paintDirty = true }
+                }
+                Action { text: "Clear"; enabled: root.ready && root.paintData !== null; onClicked: { root.paintColors = Array(root.paintColors.length).fill("#000000"); root.paintDirty = true } }
+                Action { text: "Discard edits"; enabled: root.ready && root.paintDirty; onClicked: { root.paintColors = root.paintData.colors.slice(); root.paintDirty = false } }
+              }
+              Label { text: "Paint brightness" }
+              Controls.Slider { id: paintBrightness; Layout.fillWidth: true; from: 0; to: 4; value: 4; stepSize: 1; snapMode: Controls.Slider.SnapAlways }
+              Action {
+                text: root.paintDirty ? "Apply painting *" : "Apply painting"
+                enabled: root.ready && root.paintData !== null
+                onClicked: root.request({action: "set-paint", profile: root.paintData.profile, colors: root.paintColors, brightness: Math.round(paintBrightness.value)})
+              }
+              Label { text: "Strokes are previewed locally. Apply writes flash; wait 10 seconds between uploads. Previous device colours cannot be backed up reliably."; opacity: 0.6 }
+            }
+            ColumnLayout {
               visible: tabs.currentIndex === 4
               Layout.fillWidth: true
               spacing: 12
               Label { text: "Current firmware: " + (root.state.firmware || "not connected"); font.bold: true }
-              Label { text: "Check the vendor's firmware catalogue for this exact keyboard (device 4207)." }
+              Label { text: "Check the vendor's firmware catalogue for the detected keyboard." }
               RowLayout {
                 Action { text: "Check updates"; enabled: root.ready; onClicked: root.request({action: "firmware-check"}) }
                 Action { text: "Download package"; enabled: root.ready && root.firmwareData && !!root.firmwareData.downloadPath; onClicked: root.request({action: "firmware-download"}) }

@@ -19,9 +19,9 @@ release is created by the preparation process.
    git push -u origin main
    ```
 
-4. Optionally create a **prerelease** for v0.2.1 and attach
-   `dist/omarchy-keydous-0.2.1.zip`. Keep the firmware bridge's unverified status
-   in the release notes. Do not label firmware updating as hardware-validated.
+4. Optionally create a **prerelease** for v0.4.0 and attach
+   `dist/omarchy-keydous-0.4.0.zip`. Keep the firmware bridge's unverified status
+   in the release notes. Use the 0.4.0 entry in CHANGELOG.md as the release body. Do not label firmware updating as hardware-validated.
 
 The archive is built from an explicit source-file list. Vendor installers,
 extracted binaries, firmware packages, cached JavaScript, personal keyboard

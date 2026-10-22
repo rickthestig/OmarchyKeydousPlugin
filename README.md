@@ -1,7 +1,8 @@
 # Keydous Keyboard for Omarchy
 
-Native Omarchy bar controls for the **Keydous NJ81 MAX-CP TMR**: lighting,
-keymaps, magnetic switch settings, device options and the keyboard display.
+Native Omarchy bar lighting and painting for compatible **Keydous keyboards**,
+including NJ98-CP variants. NJ81 MAX-CP TMR also has advanced keymap, magnetic
+switch, device and display controls. See the [model compatibility table](docs/compatibility.md).
 
 **Early release.** The owner has reported working lighting controls and a
 working tabbed popup. Advanced writes and the experimental vendor firmware
@@ -11,6 +12,10 @@ verified end to end. This project is independent of Keydous and RongYuan.
 ## Features
 
 - RGB effects, colour, brightness, speed and four onboard profiles.
+- Per-key colour painting with drag strokes, erasing, swatches and a local preview.
+- Model-aware USB detection, profile counts and isolated local paintings.
+- NJ81 MAX keyboard-shaped painting and hardware slot views, with remembered
+  live key mappings and the corrected Del navigation key.
 - Live Windows/Mac base and Fn keymaps, normal/media remaps and ASCII text macros.
 - Per-key actuation, release, rapid trigger sensitivities and bottom dead zone.
 - Polling rate, WASD/arrow swap, accidental-trigger prevention, stabilization,
@@ -21,8 +26,10 @@ verified end to end. This project is independent of Keydous and RongYuan.
   experimental Linux replacement for the IoT Manager HID transport.
 
 The keyboard uses the proprietary ROYUAN gen2 protocol. It is not QMK/VIA
-firmware, despite the vendor's qmk.top website name. Only device record **4207**
-is supported. USB ID `39ab:9016` alone does not establish compatibility.
+firmware, despite the vendor's qmk.top website name. Exact device records select protocol families, profile counts and enabled
+features. This is not universal support for every Keydous model: unknown
+protocols and unsupported lighting tables have writes disabled. Shared USB
+IDs alone do not establish compatibility.
 
 ## Requirements
 
@@ -53,12 +60,13 @@ If the previous widget remains visible, restart the shell:
 omarchy restart shell
 ```
 
-The keyboard icon opens **Lighting**, **Keys**, **Switches**, **Device** and
-**Firmware** tabs. See [usage](docs/usage.md).
+The keyboard icon opens **Lighting**, **Keys**, **Switches**, **Device**,
+**Firmware** and **Paint** tabs. See [usage](docs/usage.md).
 
 ### Device permissions
 
-If you receive permission errors, install the supplied application-mode rule:
+If you receive permission errors, install the supplied application-mode rules
+(the filename is retained for compatibility; it now covers the bundled models):
 
 ```bash
 sudo install -m 644 udev/70-keydous-nj81-max.rules /etc/udev/rules.d/

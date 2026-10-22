@@ -61,3 +61,28 @@ backup. There is no automatic restore feature yet.
   are intentionally refused.
 - Native controls disabled: stop the IoT compatibility service first.
 - Firmware HTTP 500: see [firmware diagnostics](firmware.md).
+
+## Per-key painting
+
+Open **Paint**, click **Load painting**, choose a brush colour and click or drag
+across the keyboard view. Right-drag erases LEDs. The exact detected device record
+selects the NJ81 MAX 75% / 81-key geometry, including staggered rows and wide keys.
+Unique assignments from the live Windows base keymap resolve the hardware slots;
+these mappings are retained locally so later remaps do not move the physical keys.
+Hover to see the current assignment and slot. Ambiguous positions are dimmed;
+use **Hardware slots** to edit them. Both views edit the same painting.
+Other models use hardware slot view. See [compatibility](compatibility.md) for
+enabled records and protocol limits; USB IDs or key counts alone do not
+establish a compatible lighting protocol.
+Fill all, Clear and Discard edits affect the local preview. **Apply painting**
+uploads the whole pattern and selects custom lighting mode with its own brightness.
+
+Pattern slot 1 is shared across onboard profiles. Local drafts are loaded from the
+last successful upload for the selected profile; an initial canvas is black.
+Unsaved edits are lost when switching profiles or reloading the plugin.
+Uploads are limited to one every ten seconds because they write flash.
+The previous lighting settings and local painting are backed up before upload.
+Device pattern readback is unreliable, so colours must be checked on the keyboard;
+only the selected custom mode is verified automatically.
+
+Protocol: [ROYUAN per-key colour](https://github.com/dniminenn/sharkfin/blob/master/docs/PROTOCOL.md#per-key-colour).

@@ -11,7 +11,7 @@ import tempfile
 
 PLUGIN_ID = 'eg.keydous'
 RUNTIME = ('manifest.json', 'Panel.qml', 'bridge.py', 'advanced.py', 'native.py',
-           'firmware.py', 'iot_linux.py', 'README.md', 'LICENSE')
+           'firmware.py', 'iot_linux.py', 'models.py', 'keydous-models.json', 'README.md', 'LICENSE')
 
 
 def install(source, config_home, state_home, enable=False):

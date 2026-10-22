@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Native settings for the exact NJ81 MAX-CP record, using ROYUAN gen2.
+"""Model-aware Keydous lighting; advanced writes limited to NJ81 MAX-CP.
 
 Protocol reference: dniminenn/sharkfin docs/PROTOCOL.md. No boot/erase opcodes.
 """
@@ -8,12 +8,14 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import struct
 import subprocess
 import time
 
 from bridge import Keyboard, DEVICE_ID, packet
+from models import spec
 
 NAMES = {0: 'Disabled / inherited', 40: 'Enter', 41: 'Escape', 42: 'Backspace',
          43: 'Tab', 44: 'Space', 45: '-', 46: '=', 47: '[', 48: ']', 49: '\\',
@@ -23,6 +25,8 @@ NAMES = {0: 'Disabled / inherited', 40: 'Enter', 41: 'Escape', 42: 'Backspace',
          79: 'Right', 80: 'Left', 81: 'Down', 82: 'Up',
          224: 'Left Ctrl', 225: 'Left Shift', 226: 'Left Alt', 227: 'Left Super',
          228: 'Right Ctrl', 229: 'Right Shift', 230: 'Right Alt', 231: 'Right Super'}
+NAMES.update({83: 'Num Lock', 84: 'Num /', 85: 'Num *', 86: 'Num -', 87: 'Num +', 88: 'Num Enter', 98: 'Num 0', 99: 'Num .'})
+NAMES.update({89+i: 'Num '+str(i+1) for i in range(9)})
 NAMES.update({4+i: chr(65+i) for i in range(26)})
 NAMES.update({30+i: str((i+1) % 10) for i in range(10)})
 NAMES.update({58+i: 'F'+str(i+1) for i in range(12)})
@@ -58,11 +62,68 @@ def key_choices():
     return choices
 
 
-def snapshot(kind, value):
+def paint_layout(device_id, matrix):
+    """Detect geometry by exact device record; resolve only unique live usages.
+
+    Remaps cannot reveal physical locations. Persist resolved positions once,
+    and leave ambiguous/unmapped positions disabled rather than guessing.
+    """
+    if spec(device_id).get('keyLayout') != 'Common81_NJ81MAX':
+        return dict(name=spec(device_id)['displayName'] + ' · hardware slots', keys=[], width=16, height=6.4, unresolved=0)
+    positions = []
+    def row(y, entries):
+        x = 0
+        for code, label, width in entries:
+            positions.append(dict(code=code, label=label, x=x, y=y, w=width, h=1))
+            x += width
+    positions.append(dict(code=41, label='Esc', x=0, y=0, w=1, h=1))
+    for i in range(12):
+        positions.append(dict(code=58+i, label=f'F{i+1}', x=1.5+i+(i//4)*0.25, y=0, w=1, h=1))
+    row(1.4, [(53,'`',1)] + [(30+i,str((i+1)%10),1) for i in range(10)] +
+        [(45,'-',1),(46,'=',1),(42,'Backspace',2),(76,'Del',1)])
+    row(2.4, [(43,'Tab',1.5)] + [(ord(c)-97+4,c.upper(),1) for c in 'qwertyuiop'] +
+        [(47,'[',1),(48,']',1),(49,'Backslash',1.5),(75,'PgUp',1)])
+    row(3.4, [(57,'Caps',1.75)] + [(ord(c)-97+4,c.upper(),1) for c in 'asdfghjkl'] +
+        [(51,';',1),(52,"'",1),(40,'Enter',2.25),(78,'PgDn',1)])
+    row(4.4, [(225,'Shift',2.25)] + [(ord(c)-97+4,c.upper(),1) for c in 'zxcvbnm'] +
+        [(54,',',1),(55,'.',1),(56,'/',1),(229,'Shift',1.75),(82,'↑',1),(77,'End',1)])
+    row(5.4, [(224,'Ctrl',1.25),(227,'Super',1.25),(226,'Alt',1.25),(44,'Space',6.25),
+              (230,'Alt',1),('fn','Fn',1),(228,'Ctrl',1),(80,'←',1),(81,'↓',1),(79,'→',1)])
+    folder = Path.home() / '.local/state/omarchy-keydous'
+    path = folder / f'layout-{device_id}.json'
+    cached = json.loads(path.read_text()) if path.exists() else {}
+    tokens = {str(key['code']) for key in positions}
+    cached = {token: slot for token, slot in cached.items() if token in tokens}
+    slots = {}
+    for i, value in enumerate(matrix[:126]):
+        token = 'fn' if value[:2] == [10, 1] else value[2] if value[:2] == [0, 0] and value[3] == 0 else None
+        if token is not None:
+            slots.setdefault(str(token), []).append(i)
+    # Cached positions remain stable when the user later remaps a key.
+    used = set(cached.values())
+    for key in positions:
+        token = str(key['code'])
+        candidates = slots.get(token, [])
+        if token not in cached and len(candidates) == 1 and candidates[0] not in used:
+            cached[token] = candidates[0]
+            used.add(candidates[0])
+        key['slot'] = cached.get(token, -1)
+        key['assignment'] = key_label(matrix[key['slot']]) if key['slot'] >= 0 else 'Unresolved — use slot view'
+    if cached:
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        temp = path.with_suffix('.tmp')
+        temp.write_text(json.dumps(cached) + '\n')
+        temp.chmod(0o600)
+        temp.replace(path)
+    return dict(name='Keydous NJ81 MAX · 75% · 81 keys', keys=positions, width=16, height=6.4,
+                unresolved=sum(k['slot'] < 0 for k in positions))
+
+
+def snapshot(kind, value, device_id=DEVICE_ID):
     folder = Path.home() / '.local/state/omarchy-keydous/backups'
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     target = folder / (datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f') + '-' + kind + '.json')
-    body = dict(schemaVersion=1, deviceId=DEVICE_ID, kind=kind, savedAt=datetime.datetime.now().isoformat(), data=value)
+    body = dict(schemaVersion=1, deviceId=device_id, kind=kind, savedAt=datetime.datetime.now().isoformat(), data=value)
     with target.open('x') as stream:
         json.dump(body, stream, indent=2)
         stream.write('\n')
@@ -97,6 +158,9 @@ def rgb565_columns(rgb):
 
 
 class AdvancedKeyboard(Keyboard):
+    def snapshot(self, kind, value):
+        return snapshot(kind, value, device_id=self.device_id)
+
     def exchange(self, op, payload=(), raw=False):
         request = packet(op, payload)
         self.send(request)
@@ -113,24 +177,31 @@ class AdvancedKeyboard(Keyboard):
         raise ValueError(f'Command 0x{op:02x} is unsupported or returned a stale reply.')
 
     def guard_profile(self, request):
-        expected = integer(request.get('profile'), 0, 3, 'Profile')
-        actual = self.get(0x84)[1]
+        expected = integer(request.get('profile'), 0, self.model['profiles']-1, 'Profile')
+        actual = self.get(self.profile_opcode)[1]
         if expected != actual:
             raise ValueError('The onboard profile changed. Reload this tab before applying.')
         return actual
 
     def matrix(self, profile, host, layer):
-        integer(profile, 0, 3, 'Profile')
+        integer(profile, 0, self.model['profiles']-1, 'Profile')
         integer(host, 0, 3, 'Host layer')
         if layer not in ('base', 'fn'):
             raise ValueError('Layer must be base or fn')
+        if not self.caps['keymap']:
+            raise ValueError('Keymap reads are unsupported for this model')
+        if self.model['family'] == 'yc500' and host != 0:
+            raise ValueError('Separate host layers are unavailable on this protocol')
         data = bytearray()
         for page in range(8):
             payload = [profile, 255, page, host] if layer == 'base' else [host, profile, 255, page]
             # First put a distinct known response in the receive slot. If the
             # page opcode is ignored, a stale profile reply is rejected.
-            baseline = self.get(0x84)
-            reply = self.exchange(0x8a if layer == 'base' else 0x90, payload, raw=True)
+            baseline = self.get(self.profile_opcode)
+            if self.model['family'] == 'yc500':
+                payload = [profile, page]
+            op = (0x89 if self.model['family'] == 'yc500' else 0x8a) if layer == 'base' else 0x90
+            reply = self.exchange(op, payload, raw=True)
             if reply == baseline:
                 raise ValueError('Keymap read returned the preceding profile reply.')
             data.extend(reply)
@@ -164,7 +235,7 @@ class AdvancedKeyboard(Keyboard):
             raise ValueError('This key changed since it was loaded. Reload before remapping.')
         if before[slot][0:2] == [10, 1]:
             raise ValueError('The Fn key is protected to retain access to onboard shortcuts.')
-        path = snapshot('keymap', dict(profile=profile, host=host, layer=layer, keys=before))
+        path = self.snapshot('keymap', dict(profile=profile, host=host, layer=layer, keys=before))
         payload = [profile, slot, 0, 0, 1, host] if layer == 'base' else [host, profile, slot]
         data = packet(0x0a if layer == 'base' else 0x10, payload)
         data[8:12] = bytes(value)
@@ -177,9 +248,75 @@ class AdvancedKeyboard(Keyboard):
         result.update(message='Key assignment saved and verified', backup=path)
         return result
 
+    @property
+    def paint_count(self):
+        return 128 if self.model['family'] == 'yc500' else 126
+
+    def paint_path(self, profile):
+        folder = Path.home() / '.local/state/omarchy-keydous'
+        if self.device_id != DEVICE_ID:
+            folder /= str(self.device_id)
+        return folder / f'paint-{profile}.json'
+
+    def paint(self, req):
+        profile = self.guard_profile(req)
+        path = self.paint_path(profile)
+        colors = ['#000000'] * self.paint_count
+        if path.exists():
+            colors = json.loads(path.read_text())['colors']
+        keys = self.matrix(profile, 0, 'base')
+        return dict(kind='paint', profile=profile, colors=colors,
+                    layout=paint_layout(self.device_id, keys),
+                    labels=[f'{i:03d} · {key_label(v)}' for i, v in enumerate(keys[:self.paint_count])],
+                    message='Local painting loaded. Existing keyboard patterns cannot be read reliably.')
+
+    def set_paint(self, req):
+        if not self.caps['paint']:
+            raise ValueError('Per-key painting is not supported for this model lighting table')
+        profile = self.guard_profile(req)
+        colors = req.get('colors')
+        if not isinstance(colors, list) or len(colors) != self.paint_count or any(
+                not isinstance(c, str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', c) for c in colors):
+            raise ValueError(f'Painting requires exactly {self.paint_count} #RRGGBB colours')
+        brightness = integer(req.get('brightness', 4), 0, 4, 'Brightness')
+        path = self.paint_path(profile)
+        cooldown = path.parent / 'paint-last-upload'
+        if cooldown.exists() and time.time() - cooldown.stat().st_mtime < 10:
+            raise ValueError('Wait 10 seconds between painting uploads')
+        before = self.state()
+        previous = json.loads(path.read_text()) if path.exists() else None
+        backup = self.snapshot('paint', dict(profile=profile, lighting=before, localPainting=previous,
+                                       note='Previous device pattern cannot be read reliably'))
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        cooldown.touch(mode=0o600)
+        blob = b''.join(bytes.fromhex(c[1:]) for c in colors)
+        # USERPIC uses distinct gen2 / yc500 headers and colour counts.
+        # Reserve pattern slot 0; mode 13 selects that slot in its high nibble.
+        for page, start in enumerate(range(0, len(blob), 56)):
+            chunk = blob[start:start+56]
+            header = [0, 255, page, len(chunk), int(page == 6)]
+            if self.model['family'] == 'yc500':
+                header = [0, len(blob) & 255, len(blob) >> 8, page, 0]
+            data = packet(0x0c, header)
+            data[8:8+len(chunk)] = chunk
+            self.send(data)
+            time.sleep(0.1)
+        time.sleep(2)
+        wire_speed = 1 if self.model['family'] == 'yc500' else 0
+        self.send(packet(0x07, [13, wire_speed, brightness, 7, 0, 200, 200], bit8=True))
+        check = self.get(0x87)
+        if check[1:8] != bytes([13, wire_speed, brightness, 7, 0, 200, 200]):
+            raise ValueError('Pattern uploaded but lighting mode did not read back. Reload before retrying.')
+        temp = path.with_suffix('.tmp')
+        temp.write_text(json.dumps(dict(colors=colors, profile=profile)) + '\n')
+        temp.chmod(0o600)
+        temp.replace(path)
+        return dict(kind='paint-saved', profile=profile,
+                    message='Painting uploaded; custom mode verified. Check colours on the keyboard.', backup=backup)
+
     def column(self, subop, slot, wide=True):
         per_page = 32 if wide else 64
-        baseline = self.get(0x84)
+        baseline = self.get(self.profile_opcode)
         data = self.exchange(0xe5, [subop, 1, slot // per_page], raw=True)
         if data == baseline:
             raise ValueError('Switch settings are unavailable on this firmware')
@@ -234,7 +371,7 @@ class AdvancedKeyboard(Keyboard):
             if not lo <= value <= hi:
                 raise ValueError(f'{name} must be in {lo}..{hi} mm')
             raw[name] = round(value * before['scale'])
-        path = snapshot('switches', before)
+        path = self.snapshot('switches', before)
         # Preserve the lower mode bits; changing RT never changes DKS/mod-tap.
         for name, value in raw.items():
             data = packet(0x65, [SUBOPS[name], 0, before['slot'], 1])
@@ -249,7 +386,7 @@ class AdvancedKeyboard(Keyboard):
         return result
 
     def device(self, req):
-        result = dict(kind='device', profile=self.get(0x84)[1], firmware=self.firmware,
+        result = dict(kind='device', profile=self.get(self.profile_opcode)[1], firmware=self.firmware,
                       deviceId=self.device_id, options={}, warnings=[])
         for name, op in [('sleep', 0x91), ('autoOS', 0x97), ('reportRateRaw', 0x83), ('keyboardOptions', 0x89)]:
             try:
@@ -277,7 +414,7 @@ class AdvancedKeyboard(Keyboard):
         self.guard_profile(req)
         before = self.device(req)
         change = req.get('setting')
-        path = snapshot('device', before)
+        path = self.snapshot('device', before)
         if change == 'sleep':
             values = req.get('value')
             if not isinstance(values, list) or len(values) != 4:
@@ -333,7 +470,7 @@ class AdvancedKeyboard(Keyboard):
     def macro_read(self, slot):
         data = bytearray()
         for page in range(4):
-            baseline = self.get(0x84)
+            baseline = self.get(self.profile_opcode)
             reply = self.exchange(0x8b, [slot, page], raw=True)
             if reply == baseline:
                 raise ValueError('Macro read is unsupported')
@@ -380,7 +517,7 @@ class AdvancedKeyboard(Keyboard):
         blob.extend(bytes(4))
         if len(blob) > 256:
             raise ValueError('This text needs more than one macro slot; use fewer characters')
-        path = snapshot('macro', dict(macro=slot, raw=before.hex()))
+        path = self.snapshot('macro', dict(macro=slot, raw=before.hex()))
         padded = bytes(blob).ljust(256, b'\0')
         for page in range(5):
             data = packet(0x0b, [slot, page, 56, int(page == 4)])
@@ -417,7 +554,7 @@ class AdvancedKeyboard(Keyboard):
             time.sleep(0.1)
         if not ready:
             raise ValueError('Display did not accept the image transfer')
-        snapshot('display-upload', dict(slot=slot, source=path, sha256=hashlib.sha256(data).hexdigest(),
+        self.snapshot('display-upload', dict(slot=slot, source=path, sha256=hashlib.sha256(data).hexdigest(),
                                        note='Previous display picture cannot be read back'))
         for page, start in enumerate(range(0,len(data),56)):
             chunk = data[start:start+56]
@@ -432,17 +569,21 @@ class AdvancedKeyboard(Keyboard):
         host = integer(req.get('host', 0), 0, 3, 'Host layer')
         body = dict(profile=profile, host=host, lighting=self.state(), device=self.device(req),
                     base=self.matrix(profile, host, 'base'), fn=self.matrix(profile, host, 'fn'))
-        path = snapshot('profile-export', body)
+        path = self.snapshot('profile-export', body)
         return dict(kind='export', message='Profile keymaps, lighting and device settings exported', path=path)
 
     def execute(self, req):
-        actions = {'keys': self.keys, 'remap': self.remap, 'switches': self.switches,
+        actions = {'paint': self.paint, 'set-paint': self.set_paint, 'keys': self.keys, 'remap': self.remap, 'switches': self.switches,
                    'set-switches': self.set_switches, 'device': self.device,
                    'set-device': self.set_device, 'clock': self.clock, 'export': self.export,
                    'macro': self.macro, 'macro-text': self.macro_text, 'display-image': self.display_image}
         action = req.get('action')
         if action not in actions:
             raise ValueError('Unsupported native action')
+        if not self.caps['advanced'] and action not in ('keys', 'paint', 'set-paint'):
+            raise ValueError('Advanced writes are not validated for this model')
+        if action in ('paint', 'set-paint') and not self.caps['paint']:
+            raise ValueError('Per-key painting is not supported for this model lighting table')
         result = actions[action](req)
         result.update(ok=True, connected=True)
         return result

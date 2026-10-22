@@ -124,6 +124,8 @@ class Backend:
             raise ValueError('Connect exactly one NJ81 MAX-CP by USB cable before starting the update bridge')
         keyboard = Keyboard(paths[0])
         try:
+            if keyboard.device_id != 4207:
+                raise ValueError('Firmware bridge is supported only for device record 4207')
             self.physical_port = usb_parent(paths[0])
         except Exception:
             keyboard.close()
@@ -176,7 +178,11 @@ class Backend:
             raise ValueError('This interface is not on the verified keyboard USB port')
         if path not in self.handles:
             if path in candidates():
-                self.handles[path] = Keyboard(path)  # verifies record 4207
+                keyboard = Keyboard(path)
+                if keyboard.device_id != 4207:
+                    keyboard.close()
+                    raise ValueError('IoT bridge is supported only for device record 4207')
+                self.handles[path] = keyboard
             elif self.firmware_mode and usb_parent(path) == self.physical_port:
                 self.handles[path] = RawHandle(path)
             else:

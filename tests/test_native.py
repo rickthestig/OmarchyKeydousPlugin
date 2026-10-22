@@ -90,6 +90,148 @@ class NativeTests(unittest.TestCase):
     def tearDown(self):
         patch.stopall()
 
+    def test_paint_packets_and_local_copy(self):
+        colors = ['#123456'] * 125 + ['#abcdef']
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'paint-1.json'
+            original_get = self.kb.get
+            def get(op):
+                if op == 0x87:
+                    return bytes([op, 13, 0, 3, 7, 0, 200, 200]) + bytes(56)
+                return original_get(op)
+            with patch.object(self.kb, 'paint_path', return_value=path), patch.object(self.kb, 'get', side_effect=get):
+                result = self.kb.set_paint(dict(profile=1, colors=colors, brightness=3))
+                pages = self.kb.sent[:7]
+                self.assertEqual(len(self.kb.sent), 8)
+                self.assertEqual([list(p[:6]) for p in pages],
+                                 [[12, 0, 255, n, 56 if n < 6 else 42, int(n == 6)] for n in range(7)])
+                for p in pages:
+                    self.assertEqual(sum(p[:8]) & 255, 255)
+                blob = b''.join(p[8:8+p[4]] for p in pages)
+                self.assertEqual(blob, bytes.fromhex('123456') * 125 + bytes.fromhex('abcdef'))
+                self.assertEqual(self.kb.paint(dict(profile=1))['colors'], colors)
+                self.assertEqual(result['kind'], 'paint-saved')
+                with self.assertRaisesRegex(ValueError, '10 seconds'):
+                    self.kb.set_paint(dict(profile=1, colors=colors))
+
+    def test_physical_layout_resolves_unique_keys_and_preserves_remaps(self):
+        with tempfile.TemporaryDirectory() as folder, patch('advanced.Path.home', return_value=Path(folder)):
+            empty = [[0, 0, 0, 0] for _ in range(128)]
+            geometry = advanced.paint_layout(4207, empty)
+            self.assertEqual(len(geometry['keys']), 81)
+            delete = next(k for k in geometry['keys'] if k['label'] == 'Del')
+            self.assertEqual(delete['code'], 76)
+            for label in ('PgUp', 'PgDn'):
+                below = next(k for k in geometry['keys'] if k['label'] == label)
+                self.assertEqual(delete['x'], below['x'])
+                self.assertLess(delete['y'], below['y'])
+            self.assertFalse(any(k['label'] == 'Home' for k in geometry['keys']))
+            matrix = [v[:] for v in empty]
+            for i, key in enumerate(geometry['keys']):
+                matrix[i] = [10, 1, 0, 0] if key['code'] == 'fn' else [0, 0, key['code'], 0]
+            resolved = advanced.paint_layout(4207, matrix)
+            self.assertEqual(resolved['unresolved'], 0)
+            self.assertEqual(len(set(k['slot'] for k in resolved['keys'])), 81)
+            for key in resolved['keys']:
+                self.assertLessEqual(key['x'] + key['w'], resolved['width'])
+                self.assertLessEqual(key['y'] + key['h'], resolved['height'])
+            a = next(k for k in resolved['keys'] if k['label'] == 'A')
+            matrix[a['slot']] = [0, 0, 5, 0]
+            remapped = advanced.paint_layout(4207, matrix)
+            self.assertEqual(next(k for k in remapped['keys'] if k['label'] == 'A')['slot'], a['slot'])
+            self.assertEqual(next(k for k in remapped['keys'] if k['label'] == 'A')['assignment'], 'B')
+
+    def test_layout_does_not_guess_duplicate_or_unknown_keys(self):
+        with tempfile.TemporaryDirectory() as folder, patch('advanced.Path.home', return_value=Path(folder)):
+            matrix = [[0, 0, 4, 0] for _ in range(128)]
+            layout = advanced.paint_layout(4207, matrix)
+            self.assertTrue(all(k['slot'] == -1 for k in layout['keys']))
+            self.assertEqual(advanced.paint_layout(1234, matrix)['keys'], [])
+
+    def test_all_enabled_models_use_their_family_packet_shape(self):
+        from models import MODELS, capabilities
+        for identity, record in MODELS.items():
+            if not capabilities(record)['paint']:
+                continue
+            with self.subTest(device=identity), tempfile.TemporaryDirectory() as folder:
+                kb = FakeAdvanced()
+                kb.device_id = identity
+                kb.profile = 0
+                def get(op):
+                    if op == kb.profile_opcode:
+                        return bytes([op, 0]) + bytes(62)
+                    if op == 0x87:
+                        return bytes([op]) + bytes(kb.sent[-1][1:])
+                    raise AssertionError(op)
+                with patch.object(kb, 'get', side_effect=get), patch('advanced.Path.home', return_value=Path(folder)):
+                    colors = ['#123456'] * kb.paint_count
+                    result = kb.execute(dict(action='set-paint', profile=0, colors=colors))
+                    self.assertTrue(result['ok'])
+                    self.assertEqual(len(kb.sent), 8)
+                    if record['family'] == 'yc500':
+                        self.assertEqual(kb.paint_count, 128)
+                        self.assertEqual(list(kb.sent[0][:6]), [12, 0, 128, 1, 0, 0])
+                        self.assertEqual(list(kb.sent[6][:6]), [12, 0, 128, 1, 6, 0])
+                        self.assertEqual(kb.sent[-1][2], 1)
+                    else:
+                        self.assertEqual(kb.paint_count, 126)
+                        self.assertEqual(list(kb.sent[6][:6]), [12, 0, 255, 6, 42, 1])
+                    self.assertEqual(json.loads(kb.paint_path(0).read_text())['colors'], colors)
+                    self.assertEqual(self.snapshot.call_args.kwargs['device_id'], identity)
+
+    def test_cross_model_advanced_writes_are_blocked(self):
+        for identity in (1259, 2576, 3496, 4140, 999999):
+            kb = FakeAdvanced()
+            kb.device_id = identity
+            with self.assertRaisesRegex(ValueError, 'not validated'):
+                kb.execute(dict(action='set-switches', profile=0))
+            self.assertFalse(kb.sent)
+
+    def test_firmware_dispatch_rejects_other_models(self):
+        import native
+        kb = FakeAdvanced()
+        kb.device_id = 2576
+        with patch('native.candidates', return_value=['/dev/fake']), patch(
+                'native.AdvancedKeyboard', return_value=kb), patch.object(kb, 'close') as close, patch(
+                'native.firmware.check') as check:
+            with self.assertRaisesRegex(ValueError, 'not validated'):
+                native.dispatch(dict(action='firmware-check'))
+            check.assert_not_called()
+            close.assert_called_once()
+
+    def test_paint_files_do_not_cross_models(self):
+        first, second = FakeAdvanced(), FakeAdvanced()
+        first.device_id, second.device_id = 2576, 4207
+        self.assertNotEqual(first.paint_path(0), second.paint_path(0))
+
+    def test_yc500_matrix_uses_legacy_profile_and_page(self):
+        kb = FakeAdvanced()
+        kb.device_id = 1259
+        with patch.object(kb, 'get', return_value=bytes([0x85])+bytes(63)), patch.object(
+                kb, 'exchange', return_value=bytes([0,0,4,0])*16) as exchange:
+            result = AdvancedKeyboard.matrix(kb, 0, 0, 'base')
+            self.assertEqual(len(result), 128)
+            self.assertEqual(exchange.call_args_list[0].args, (0x89, [0, 0]))
+            self.assertEqual(exchange.call_args_list[-1].args, (0x89, [0, 7]))
+
+    def test_invalid_paint_never_writes(self):
+        for colors in ([], ['#ffffff'] * 127, ['#gggggg'] * 126, [None] * 126):
+            with self.assertRaises(ValueError):
+                self.kb.set_paint(dict(profile=1, colors=colors))
+        with self.assertRaisesRegex(ValueError, 'profile changed'):
+            self.kb.set_paint(dict(profile=0, colors=['#ffffff'] * 126))
+        self.assertFalse(self.kb.sent)
+
+    def test_paint_mode_readback_failure_does_not_save(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'paint-1.json'
+            original_get = self.kb.get
+            with patch.object(self.kb, 'paint_path', return_value=path), patch.object(
+                    self.kb, 'get', side_effect=lambda op: bytes(64) if op == 0x87 else original_get(op)):
+                with self.assertRaisesRegex(ValueError, 'mode did not read back'):
+                    self.kb.set_paint(dict(profile=1, colors=['#123456'] * 126))
+            self.assertFalse(path.exists())
+
     def test_remap_preserves_unrelated_keys(self):
         previous = [k[:] for k in self.kb.keymap]
         result = self.kb.remap(dict(profile=1, slot=3, expected=previous[3], value=[0,0,40,0]))

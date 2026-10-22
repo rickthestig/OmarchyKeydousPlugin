@@ -10,10 +10,10 @@ import zipfile
 ROOT = Path(__file__).resolve().parent.parent
 FILES = (
     '.gitignore', '.github/workflows/checks.yml', 'manifest.json', 'Panel.qml',
-    'bridge.py', 'advanced.py', 'native.py', 'firmware.py', 'iot_linux.py',
+    'bridge.py', 'advanced.py', 'native.py', 'models.py', 'keydous-models.json', 'firmware.py', 'iot_linux.py',
     'README.md', 'LICENSE', 'CHANGELOG.md', 'CONTRIBUTING.md', 'PUBLISHING.md',
-    'docs/usage.md', 'docs/firmware.md', 'docs/github-upload.md', 'udev/70-keydous-nj81-max.rules',
-    'scripts/install.py', 'scripts/package.py',
+    'docs/usage.md', 'docs/compatibility.md', 'docs/firmware.md', 'docs/github-upload.md', 'udev/70-keydous-nj81-max.rules',
+    'scripts/install.py', 'scripts/package.py', 'scripts/sync_models.py',
     'tests/test_bridge.py', 'tests/test_native.py', 'tests/test_distribution.py', 'tests/test_install.py',
 )
 
