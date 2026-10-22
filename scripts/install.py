@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Install the user-owned plugin, optionally adding it to the bar. No root changes."""
 import argparse
+import ctypes
 import datetime
 import json
 import os
@@ -10,8 +11,26 @@ import shutil
 import tempfile
 
 PLUGIN_ID = 'eg.keydous'
-RUNTIME = ('manifest.json', 'Panel.qml', 'bridge.py', 'advanced.py', 'native.py',
+RUNTIME = ('manifest.json', 'Panel.qml', 'KeyboardMap.qml', 'TravelField.qml', 'bridge.py', 'advanced.py', 'native.py',
            'firmware.py', 'iot_linux.py', 'models.py', 'keydous-models.json', 'README.md', 'LICENSE')
+
+
+def publish(staging, destination):
+    """Publish one complete tree, keeping staging outside the watched plugins.
+
+    Linux rename exchange keeps an existing plugin continuously available and
+    does not expose either a half-copy or a temporary second manifest.
+    """
+    if not destination.exists() and not destination.is_symlink():
+        staging.rename(destination)
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename = libc.renameat2
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(-100, os.fsencode(staging), -100, os.fsencode(destination), 2) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, 'Atomic plugin replacement failed; existing plugin was left in place')
 
 
 def install(source, config_home, state_home, enable=False):
@@ -51,22 +70,14 @@ def install(source, config_home, state_home, enable=False):
     if config is not None and shell.exists():
         shutil.copy2(shell,backup/'shell.json')
     destination.parent.mkdir(parents=True,exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='.keydous-install-',dir=destination.parent) as temp:
+    with tempfile.TemporaryDirectory(prefix='.keydous-install-',dir=config_home) as temp:
         staging = Path(temp)/PLUGIN_ID
         staging.mkdir()
         for name in RUNTIME:
             shutil.copy2(source/name,staging/name)
         shutil.copytree(source/'docs',staging/'docs')
-        retired = Path(temp)/'previous'
-        if destination.exists() or destination.is_symlink():
-            destination.rename(retired)
-        try:
-            staging.rename(destination)
-        except Exception:
-            if retired.exists() or retired.is_symlink():
-                retired.rename(destination)
-            raise
-    if config is not None:
+        publish(staging, destination)
+    if config is not None and (not shell.exists() or json.loads(shell.read_text()) != config):
         with tempfile.NamedTemporaryFile(mode='w',prefix='.keydous-shell-',dir=shell.parent,delete=False) as stream:
             path=Path(stream.name)
             json.dump(config,stream,indent=2)

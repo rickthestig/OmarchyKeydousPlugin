@@ -213,7 +213,9 @@ class AdvancedKeyboard(Keyboard):
         layer = req.get('layer', 'base')
         keys = self.matrix(profile, host, layer)
         return dict(kind='keys', profile=profile, host=host, layer=layer,
-                    keys=[dict(slot=i, value=v, label=f'{i:03d} · {key_label(v)}') for i, v in enumerate(keys)], choices=key_choices())
+                    keys=[dict(slot=i, value=v, label=f'{i:03d} · {key_label(v)}') for i, v in enumerate(keys)],
+                    layout=paint_layout(self.device_id, keys if host == 0 and layer == 'base' else self.matrix(profile, 0, 'base')),
+                    choices=key_choices())
 
     def remap(self, req):
         profile = self.guard_profile(req)

@@ -86,3 +86,26 @@ Device pattern readback is unreliable, so colours must be checked on the keyboar
 only the selected custom mode is verified automatically.
 
 Protocol: [ROYUAN per-key colour](https://github.com/dniminenn/sharkfin/blob/master/docs/PROTOCOL.md#per-key-colour).
+
+## Graphical key settings
+
+The **Keys** and **Travel** tabs share the keyboard view with Paint. On Travel,
+click **Load keyboard**, then click a physical key to read its travel settings.
+The selected key is outlined in the theme accent; keys you have read show their
+actuation distance in millimetres. Hover for the current assignment and slot.
+
+Adjust actuation, release, rapid-trigger sensitivities and bottom dead zone
+with the sliders or numeric fields. **Apply to key** stays in the footer and
+writes only the selected, freshly read key. Existing stale-state checks,
+backups and readback verification still apply. Choosing another key discards
+unapplied field edits; read values on the drawing remain until profile/device
+changes or plugin reload. For exact keyboard layouts that are unavailable or
+ambiguous, switch to **Slots** and use the slot selector.
+
+The Keys tab uses the same drawing to select a remapping target. Base physical
+positions remain fixed when viewing Fn assignments. Travel editing remains
+available only on record 4207; the interface does not enable extra model writes.
+
+The interface uses the installed Omarchy shell's shared `qs.Ui` controls and
+`qs.Commons.Style` theme tokens, including buttons, dropdowns, sliders, toggles,
+number fields, panel headers and separators.

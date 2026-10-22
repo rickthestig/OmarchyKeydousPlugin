@@ -232,6 +232,18 @@ class NativeTests(unittest.TestCase):
                     self.kb.set_paint(dict(profile=1, colors=['#123456'] * 126))
             self.assertFalse(path.exists())
 
+    def test_fn_labels_use_base_physical_positions(self):
+        base = [[0, 0, 0, 0] for _ in range(128)]
+        base[7] = [0, 0, 4, 0]
+        fn = [value[:] for value in base]
+        fn[7] = [0, 0, 5, 0]
+        with tempfile.TemporaryDirectory() as folder, patch('advanced.Path.home', return_value=Path(folder)), patch.object(
+                self.kb, 'matrix', side_effect=lambda p, h, layer: fn if layer == 'fn' else base):
+            result = self.kb.keys(dict(profile=1, host=0, layer='fn'))
+        physical_a = next(key for key in result['layout']['keys'] if key['label'] == 'A')
+        self.assertEqual(physical_a['slot'], 7)
+        self.assertEqual(result['keys'][7]['value'], [0, 0, 5, 0])
+
     def test_remap_preserves_unrelated_keys(self):
         previous = [k[:] for k in self.kb.keymap]
         result = self.kb.remap(dict(profile=1, slot=3, expected=previous[3], value=[0,0,40,0]))

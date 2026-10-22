@@ -17,7 +17,8 @@ verified end to end. This project is independent of Keydous and RongYuan.
 - NJ81 MAX keyboard-shaped painting and hardware slot views, with remembered
   live key mappings and the corrected Del navigation key.
 - Live Windows/Mac base and Fn keymaps, normal/media remaps and ASCII text macros.
-- Per-key actuation, release, rapid trigger sensitivities and bottom dead zone.
+- Graphical per-key selection for remapping and travel, with millimetre sliders
+  for actuation, release, rapid trigger sensitivities and bottom dead zone.
 - Polling rate, WASD/arrow swap, accidental-trigger prevention, stabilization,
   OS auto-detection and sleep timers.
 - Display clock and still-picture uploads to five 160×80 slots.
@@ -53,6 +54,8 @@ The installer copies the plugin to
 if absent, and backs up existing plugin/configuration files under
 `${XDG_STATE_HOME:-~/.local/state}/omarchy-keydous/install-backups/`.
 Use `python3 scripts/install.py` without `--enable` to leave bar placement alone.
+Updates are staged outside the watched plugin directory and published atomically.
+The installer never launches or restarts a shell instance.
 
 If the previous widget remains visible, restart the shell:
 
@@ -60,7 +63,7 @@ If the previous widget remains visible, restart the shell:
 omarchy restart shell
 ```
 
-The keyboard icon opens **Lighting**, **Keys**, **Switches**, **Device**,
+The keyboard icon opens **Lighting**, **Keys**, **Travel**, **Device**,
 **Firmware** and **Paint** tabs. See [usage](docs/usage.md).
 
 ### Device permissions
@@ -93,6 +96,8 @@ update timing and recovery remain with the vendor updater. Read
 ```bash
 python3 -B -m unittest discover -s tests -v
 python3 -B scripts/package.py --check
+# On an Omarchy machine, also check QML with isolated mock helpers:
+python3 -B scripts/check_qml.py --cycles 60
 python3 -B scripts/package.py
 ```
 

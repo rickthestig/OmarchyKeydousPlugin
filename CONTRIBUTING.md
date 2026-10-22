@@ -23,3 +23,22 @@ packet shapes, boot transport or firmware writes. USB IDs alone are shared
 across boards. Report firmware changes as experimental until validated on the
 exact hardware. Keep proprietary installers, firmware packages, vendor source
 bundles, personal keymaps and machine-specific configuration out of commits.
+
+## QML lifecycle regression check
+
+On an Omarchy machine with Quickshell installed:
+
+```bash
+python3 -B scripts/check_qml.py --cycles 60
+```
+
+This copies the QML and native Omarchy UI into a private temporary directory,
+replaces the Wayland popup with an offscreen Item and replaces every Python
+helper with a mock. It never opens the keyboard, starts a real compatibility
+bridge, or connects to the desktop IPC socket. It checks rapid-request exclusion,
+response delivery, unloading with active helpers, orphan cleanup and keyboard
+selection/erase bounds. Native Wayland placement and the lifecycle of other
+installed plugins require separate desktop validation.
+
+Use this check for UI changes. Do not run the standalone Qt `qml` launcher as a
+check: it may use a different Qt version and requires a desktop connection.
